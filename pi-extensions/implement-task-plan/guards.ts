@@ -1,4 +1,6 @@
 const SHELL_COMPOSITION = /(?:^|[^\\])(?:&&|\|\||[;&|<>`])|\$\(|\r|\n/;
+/** Brace expansion and PowerShell array or expression arguments build words the guard never sees. */
+const ARGUMENT_EXPANSION = /\{[^}]*(?:,|\.\.)[^}]*\}|(?:^|\s)[(@]/;
 const WRITE_CAPABLE_GIT_OPTIONS = ["ext-diff", "open-files-in-pager", "output", "textconv"];
 const READ_ONLY_GIT =
 	/^\s*git\s+(?:status|diff|show|log|rev-parse|rev-list|merge-base|ls-files|grep)(?:\s|$)|^\s*git\s+branch\s+(?:--show-current|-a|-r|--contains)(?:\s|$)/i;
@@ -17,9 +19,13 @@ const isWriteCapableGitOption = (token: string): boolean => {
 	return name !== undefined && WRITE_CAPABLE_GIT_OPTIONS.some((option) => option.startsWith(name));
 };
 
+/** Removes quotes and escapes, so `'--output'`, `\-O` and `$'-O'` are checked as the option the shell passes on. */
+const unquote = (command: string): string => command.replace(/\$(?=['"])/g, "").replace(/['"\\]/g, "");
+
 export const isOrchestratorShellCommandAllowed = (command: string): boolean => {
 	const trimmed = command.trim();
-	if (!trimmed || SHELL_COMPOSITION.test(trimmed) || trimmed.split(/\s+/).some(isWriteCapableGitOption)) return false;
+	if (!trimmed || SHELL_COMPOSITION.test(trimmed) || ARGUMENT_EXPANSION.test(trimmed)) return false;
+	if (unquote(trimmed).split(/\s+/).some(isWriteCapableGitOption)) return false;
 	return [READ_ONLY_GIT, UV_VALIDATION, NODE_VALIDATION, PYTHON_VALIDATION, JS_VALIDATION, OTHER_VALIDATION].some(
 		(pattern) => pattern.test(trimmed),
 	);

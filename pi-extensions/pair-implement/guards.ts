@@ -36,6 +36,8 @@ const READ_ONLY_GIT_COMMANDS = new Set([
 ]);
 
 const SHELL_CONTROL_PATTERN = /[;&|><`\r\n]|\$\(/;
+/** Brace expansion and PowerShell array or expression arguments build words the guard never sees. */
+const ARGUMENT_EXPANSION_PATTERN = /\{[^}]*(?:,|\.\.)[^}]*\}|(?:^|\s)[(@]/;
 const EXECUTING_READ_OPTION_PATTERN = /(?:^|\s)(?:--pre(?:-glob)?|--ext-diff|--textconv)(?:[=\s]|$)/i;
 const EXECUTING_GIT_LONG_OPTIONS = ["ext-diff", "open-files-in-pager", "output", "textconv"];
 
@@ -47,6 +49,9 @@ const isExecutingGitOption = (token: string): boolean => {
 };
 
 const tokenize = (command: string): string[] => command.trim().split(/\s+/).filter(Boolean);
+
+/** Removes quotes and escapes, so `'--pre'`, `\-O` and `$'-O'` are checked as the option the shell passes on. */
+const unquote = (command: string): string => command.replace(/\$(?=['"])/g, "").replace(/['"\\]/g, "");
 
 const gitSubcommandIndex = (tokens: string[]): number => {
 	for (let index = 1; index < tokens.length; index += 1) {
@@ -92,7 +97,6 @@ const isReadOnlyGit = (tokens: string[]): boolean => {
 
 	const subcommand = tokens[subcommandIndex].toLowerCase();
 	const args = tokens.slice(subcommandIndex + 1);
-	if (args.some(isExecutingGitOption)) return false;
 	if (READ_ONLY_GIT_COMMANDS.has(subcommand)) return true;
 	if (subcommand === "branch") return isReadOnlyGitBranch(args);
 	if (subcommand === "tag") return isReadOnlyGitTag(args);
@@ -119,12 +123,14 @@ const isReadOnlyFind = (tokens: string[]): boolean => {
 /** Returns whether a shell command is conservatively classified as read-only. */
 export const isReadOnlyShellCommand = (command: string): boolean => {
 	const trimmed = command.trim();
-	if (!trimmed || SHELL_CONTROL_PATTERN.test(trimmed) || EXECUTING_READ_OPTION_PATTERN.test(trimmed)) return false;
+	if (!trimmed || SHELL_CONTROL_PATTERN.test(trimmed) || ARGUMENT_EXPANSION_PATTERN.test(trimmed)) return false;
+	const unquoted = unquote(trimmed);
+	if (EXECUTING_READ_OPTION_PATTERN.test(unquoted)) return false;
 
 	const tokens = tokenize(trimmed);
 	const executable = tokens[0]?.toLowerCase();
 	if (!executable) return false;
-	if (executable === "git") return isReadOnlyGit(tokens);
+	if (executable === "git") return !tokenize(unquoted).some(isExecutingGitOption) && isReadOnlyGit(tokens);
 	if (executable === "find") return isReadOnlyFind(tokens);
 	if (executable === "[") return tokens[tokens.length - 1] === "]";
 	return READ_ONLY_COMMANDS.has(executable);
