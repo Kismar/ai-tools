@@ -37,6 +37,14 @@ const READ_ONLY_GIT_COMMANDS = new Set([
 
 const SHELL_CONTROL_PATTERN = /[;&|><`\r\n]|\$\(/;
 const EXECUTING_READ_OPTION_PATTERN = /(?:^|\s)(?:--pre(?:-glob)?|--ext-diff|--textconv)(?:[=\s]|$)/i;
+const EXECUTING_GIT_LONG_OPTIONS = ["ext-diff", "open-files-in-pager", "output", "textconv"];
+
+/** Git accepts bundled short options (`-nO<pager>`) and abbreviated long options (`--open=<pager>`). */
+const isExecutingGitOption = (token: string): boolean => {
+	if (/^-[^-]*O/.test(token)) return true;
+	const name = /^--([^=]+)/.exec(token)?.[1].toLowerCase();
+	return name !== undefined && EXECUTING_GIT_LONG_OPTIONS.some((option) => option.startsWith(name));
+};
 
 const tokenize = (command: string): string[] => command.trim().split(/\s+/).filter(Boolean);
 
@@ -84,6 +92,7 @@ const isReadOnlyGit = (tokens: string[]): boolean => {
 
 	const subcommand = tokens[subcommandIndex].toLowerCase();
 	const args = tokens.slice(subcommandIndex + 1);
+	if (args.some(isExecutingGitOption)) return false;
 	if (READ_ONLY_GIT_COMMANDS.has(subcommand)) return true;
 	if (subcommand === "branch") return isReadOnlyGitBranch(args);
 	if (subcommand === "tag") return isReadOnlyGitTag(args);

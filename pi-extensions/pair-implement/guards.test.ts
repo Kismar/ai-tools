@@ -13,6 +13,7 @@ test("allows conservative inspection commands", () => {
 		"git diff --stat",
 		"git branch --show-current",
 		"git worktree list",
+		"git grep -n -o TODO",
 	]) {
 		assert.equal(isReadOnlyShellCommand(command), true, command);
 	}
@@ -22,6 +23,11 @@ test("rejects shell composition and commands that can mutate", () => {
 	for (const command of [
 		"ls && rm file",
 		"rg value . > result.txt",
+		"git grep -Otouch TODO",
+		"git grep -nOtouch TODO",
+		"git grep --open-files-in-pager=touch TODO",
+		"git grep --open=touch TODO",
+		"git diff --output=changes.patch",
 		"find . -delete",
 		"find . -exec rm {} ;",
 		"rg --pre 'touch marker' value .",

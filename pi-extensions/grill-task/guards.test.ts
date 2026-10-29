@@ -12,6 +12,7 @@ test("allows conservative repository inspection", () => {
 		"git diff --stat",
 		"git branch --show-current",
 		"git -C other log -5 --oneline",
+		"git grep -n -o TODO",
 	]) {
 		assert.equal(isReadOnlyShellCommand(command), true, command);
 	}
@@ -24,6 +25,11 @@ test("rejects composition, execution, and mutation", () => {
 		"find . -delete",
 		"find . -exec rm {} ;",
 		"rg --pre 'touch marker' value .",
+		"git grep -Otouch TODO",
+		"git grep -nOtouch TODO",
+		"git grep --open-files-in-pager=touch TODO",
+		"git grep --open=touch TODO",
+		"git diff --output=changes.patch",
 		"git switch -c feature",
 		"git add src",
 		"git commit -m change",

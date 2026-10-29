@@ -7,6 +7,7 @@ test("allows inspection and validation commands", () => {
 		"git status --short --branch",
 		"git diff HEAD^ HEAD",
 		"git branch --show-current",
+		"git grep -n -o TODO",
 		"uv run pytest",
 		"uv run ruff check .",
 	]) {
@@ -31,6 +32,10 @@ test("blocks repository and remote-delivery mutation", () => {
 		"git status & git commit -m change",
 		"git diff --output=changes.patch",
 		"git show --ext-diff HEAD",
+		"git grep -Otouch TODO",
+		"git grep -nOtouch TODO",
+		"git grep --open-files-in-pager=touch TODO",
+		"git grep --open=touch TODO",
 	]) {
 		assert.equal(isOrchestratorShellCommandAllowed(command), false, command);
 	}
