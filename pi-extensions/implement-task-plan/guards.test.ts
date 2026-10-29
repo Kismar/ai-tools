@@ -44,6 +44,12 @@ test("blocks repository and remote-delivery mutation", () => {
 		"git grep --o{x,pen}=touch TODO",
 		"git grep ('-O'+'touch') TODO",
 		"git grep @('-Otouch') TODO",
+		"git grep $'\\055Otouch' TODO",
+		"git grep ${X:--Otouch} TODO",
+		"git grep \\'-Otouch\\' TODO",
+		"git grep {-Otouch} TODO",
+		"git grep ‘-Otouch’ TODO",
+		"git grep TODO *",
 	]) {
 		assert.equal(isOrchestratorShellCommandAllowed(command), false, command);
 	}

@@ -1,6 +1,9 @@
 const SHELL_COMPOSITION = /(?:^|[^\\])(?:&&|\|\||[;&|<>`])|\$\(|\r|\n/;
-/** Brace expansion and PowerShell array or expression arguments build words the guard never sees. */
-const ARGUMENT_EXPANSION = /\{[^}]*(?:,|\.\.)[^}]*\}|(?:^|\s)[(@]/;
+/**
+ * Brace expansion, PowerShell array, expression and script block arguments, and the typographic quotes
+ * PowerShell also strips build words the guard never sees.
+ */
+const ARGUMENT_EXPANSION = /\{[^}]*(?:,|\.\.)[^}]*\}|(?:^|\s)[(@{]|[‘-‟]/;
 const WRITE_CAPABLE_GIT_OPTIONS = ["ext-diff", "open-files-in-pager", "output", "textconv"];
 const READ_ONLY_GIT =
 	/^\s*git\s+(?:status|diff|show|log|rev-parse|rev-list|merge-base|ls-files|grep)(?:\s|$)|^\s*git\s+branch\s+(?:--show-current|-a|-r|--contains)(?:\s|$)/i;
@@ -19,13 +22,61 @@ const isWriteCapableGitOption = (token: string): boolean => {
 	return name !== undefined && WRITE_CAPABLE_GIT_OPTIONS.some((option) => option.startsWith(name));
 };
 
-/** Removes quotes and escapes, so `'--output'`, `\-O` and `$'-O'` are checked as the option the shell passes on. */
-const unquote = (command: string): string => command.replace(/\$(?=['"])/g, "").replace(/['"\\]/g, "");
+/**
+ * Splits a command into the words the shell passes on, or returns undefined when a word depends on something
+ * the guard cannot evaluate: `$` outside single quotes, an unquoted glob, an escaped quote or an unclosed quote.
+ * Dropping backslashes covers both bash escapes and PowerShell's literal backslash.
+ */
+const shellWords = (command: string): string[] | undefined => {
+	const words: string[] = [];
+	let word = "";
+	let inWord = false;
+	let openBracket = false;
+	let quote: string | undefined;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index];
+		if (quote === "'") {
+			if (char === "'") quote = undefined;
+			else word += char;
+			continue;
+		}
+		if (char === "$") return undefined;
+		if (char === "\\") {
+			if (command[index + 1] === "'" || command[index + 1] === '"') return undefined;
+			inWord = true;
+			continue;
+		}
+		if (quote === '"') {
+			if (char === '"') quote = undefined;
+			else word += char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (inWord) words.push(word);
+			word = "";
+			inWord = false;
+			openBracket = false;
+			continue;
+		}
+		inWord = true;
+		if (char === "'" || char === '"') {
+			quote = char;
+			continue;
+		}
+		if (char === "*" || char === "?" || (char === "]" && openBracket)) return undefined;
+		if (char === "[") openBracket = true;
+		word += char;
+	}
+	if (quote) return undefined;
+	if (inWord) words.push(word);
+	return words;
+};
 
 export const isOrchestratorShellCommandAllowed = (command: string): boolean => {
 	const trimmed = command.trim();
 	if (!trimmed || SHELL_COMPOSITION.test(trimmed) || ARGUMENT_EXPANSION.test(trimmed)) return false;
-	if (unquote(trimmed).split(/\s+/).some(isWriteCapableGitOption)) return false;
+	const words = shellWords(trimmed);
+	if (!words || words.some(isWriteCapableGitOption)) return false;
 	return [READ_ONLY_GIT, UV_VALIDATION, NODE_VALIDATION, PYTHON_VALIDATION, JS_VALIDATION, OTHER_VALIDATION].some(
 		(pattern) => pattern.test(trimmed),
 	);

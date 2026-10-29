@@ -36,8 +36,11 @@ const READ_ONLY_GIT_COMMANDS = new Set([
 ]);
 
 const SHELL_CONTROL_PATTERN = /[;&|><`\r\n]|\$\(/;
-/** Brace expansion and PowerShell array or expression arguments build words the guard never sees. */
-const ARGUMENT_EXPANSION_PATTERN = /\{[^}]*(?:,|\.\.)[^}]*\}|(?:^|\s)[(@]/;
+/**
+ * Brace expansion, PowerShell array, expression and script block arguments, and the typographic quotes
+ * PowerShell also strips build words the guard never sees.
+ */
+const ARGUMENT_EXPANSION_PATTERN = /\{[^}]*(?:,|\.\.)[^}]*\}|(?:^|\s)[(@{]|[‘-‟]/;
 const EXECUTING_READ_OPTION_PATTERN = /(?:^|\s)(?:--pre(?:-glob)?|--ext-diff|--textconv)(?:[=\s]|$)/i;
 const EXECUTING_GIT_LONG_OPTIONS = ["ext-diff", "open-files-in-pager", "output", "textconv"];
 
@@ -48,10 +51,55 @@ const isExecutingGitOption = (token: string): boolean => {
 	return name !== undefined && EXECUTING_GIT_LONG_OPTIONS.some((option) => option.startsWith(name));
 };
 
-const tokenize = (command: string): string[] => command.trim().split(/\s+/).filter(Boolean);
-
-/** Removes quotes and escapes, so `'--pre'`, `\-O` and `$'-O'` are checked as the option the shell passes on. */
-const unquote = (command: string): string => command.replace(/\$(?=['"])/g, "").replace(/['"\\]/g, "");
+/**
+ * Splits a command into the words the shell passes on, or returns undefined when a word depends on something
+ * the guard cannot evaluate: `$` outside single quotes, an unquoted glob, an escaped quote or an unclosed quote.
+ * Dropping backslashes covers both bash escapes and PowerShell's literal backslash.
+ */
+const shellWords = (command: string): string[] | undefined => {
+	const words: string[] = [];
+	let word = "";
+	let inWord = false;
+	let openBracket = false;
+	let quote: string | undefined;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index];
+		if (quote === "'") {
+			if (char === "'") quote = undefined;
+			else word += char;
+			continue;
+		}
+		if (char === "$") return undefined;
+		if (char === "\\") {
+			if (command[index + 1] === "'" || command[index + 1] === '"') return undefined;
+			inWord = true;
+			continue;
+		}
+		if (quote === '"') {
+			if (char === '"') quote = undefined;
+			else word += char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (inWord) words.push(word);
+			word = "";
+			inWord = false;
+			openBracket = false;
+			continue;
+		}
+		inWord = true;
+		if (char === "'" || char === '"') {
+			quote = char;
+			continue;
+		}
+		if (char === "*" || char === "?" || (char === "]" && openBracket)) return undefined;
+		if (char === "[") openBracket = true;
+		word += char;
+	}
+	if (quote) return undefined;
+	if (inWord) words.push(word);
+	return words;
+};
 
 const gitSubcommandIndex = (tokens: string[]): number => {
 	for (let index = 1; index < tokens.length; index += 1) {
@@ -103,6 +151,7 @@ const isReadOnlyFind = (tokens: string[]): boolean => {
 		"-execdir",
 		"-fls",
 		"-fprint",
+		"-fprint0",
 		"-fprintf",
 		"-ok",
 		"-okdir",
@@ -110,18 +159,35 @@ const isReadOnlyFind = (tokens: string[]): boolean => {
 	return !tokens.some((token) => mutatingActions.has(token.toLowerCase()));
 };
 
+/** `tree -o <file>` writes the listing, and `-R` with `-H` writes `00Tree.html` into each directory. */
+const isReadOnlyTree = (words: string[]): boolean =>
+	!words.some((word) => /^-[^-]*[oR]/.test(word) || word.startsWith("--o"));
+
+/** `uniq <input> <output>` writes its second operand. */
+const isReadOnlyUniq = (words: string[]): boolean =>
+	words.slice(1).filter((word) => !word.startsWith("-")).length <= 1;
+
+/** `file -C` and its abbreviations of `--compile` write `magic.mgc`. */
+const isReadOnlyFile = (words: string[]): boolean =>
+	!words.some((word) => {
+		const name = /^--([^=]+)/.exec(word)?.[1];
+		return /^-[^-]*C/.test(word) || (name !== undefined && "compile".startsWith(name));
+	});
+
 /** Returns true only for a conservatively classified inspection command. */
 export const isReadOnlyShellCommand = (command: string): boolean => {
 	const trimmed = command.trim();
 	if (!trimmed || SHELL_CONTROL_PATTERN.test(trimmed) || ARGUMENT_EXPANSION_PATTERN.test(trimmed)) return false;
-	const unquoted = unquote(trimmed);
-	if (EXECUTING_READ_OPTION_PATTERN.test(unquoted)) return false;
+	const words = shellWords(trimmed);
+	if (!words || EXECUTING_READ_OPTION_PATTERN.test(words.join(" "))) return false;
 
-	const tokens = tokenize(trimmed);
-	const executable = tokens[0]?.toLowerCase();
+	const executable = words[0]?.toLowerCase();
 	if (!executable) return false;
-	if (executable === "git") return !tokenize(unquoted).some(isExecutingGitOption) && isReadOnlyGit(tokens);
-	if (executable === "find") return isReadOnlyFind(tokens);
-	if (executable === "[") return tokens[tokens.length - 1] === "]";
+	if (executable === "git") return !words.some(isExecutingGitOption) && isReadOnlyGit(words);
+	if (executable === "find") return isReadOnlyFind(words);
+	if (executable === "tree") return isReadOnlyTree(words);
+	if (executable === "uniq") return isReadOnlyUniq(words);
+	if (executable === "file") return isReadOnlyFile(words);
+	if (executable === "[") return words[words.length - 1] === "]";
 	return READ_ONLY_COMMANDS.has(executable);
 };
